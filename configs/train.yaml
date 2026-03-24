@@ -1,0 +1,106 @@
+# @package _global_
+
+# Base hydra config: Don't touch!
+defaults:
+  - override /hydra/hydra_logging: default
+  - override /hydra/job_logging: default
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ${full_path}
+  job_logging:
+    handlers:
+      file:
+        mode: w
+
+datamodule:
+  _target_: src.datamodules.ChessDataModule
+  train_path: ${root_dir}/data/train.parquet
+  test_path: ${root_dir}/data/test.parquet
+  num_workers: 8
+  batch_size: 512
+
+model:
+  _target_: src.networks.ChessModel
+  config:
+    _target_: src.modules.TransformerConfig
+    dim: 384
+    vocab_size: 15
+    seq_len: 65 # 64 for board, +1 for turn indicator
+    class_tokens: 8 # Registers
+    output_dim: 3
+    num_layers: 4
+    num_heads: 8
+    ff_mult: 3
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: True
+    lr: 1e-4
+    weight_decay: 1e-4
+  scheduler:
+    _target_: src.lightning_utils.linear_warmup_cosine_decay
+    _partial_: True
+    warmup_steps: 5000
+
+trainer:
+  _target_: lightning.Trainer
+  precision: bf16-mixed
+  max_epochs: 50
+  enable_progress_bar: True
+  gradient_clip_val: 1
+  check_val_every_n_epoch: 1
+  accelerator: auto
+  devices: 1
+  num_nodes: 1
+  default_root_dir: ${full_path}
+
+logger:
+  _target_: lightning.pytorch.loggers.wandb.WandbLogger
+  offline: False
+  id: null
+  log_model: False
+  tags: ${tags}
+  project: ${project_name}
+  name: ${network_name}
+  save_dir: ${full_path}
+  resume: ${full_resume}
+
+callbacks:
+  model_summary:
+    _target_: lightning.pytorch.callbacks.RichModelSummary
+    max_depth: 2
+  lr_monitor:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: step
+  checkpoint_per_epoch:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${full_path}/checkpoints
+    filename: best
+    monitor: valid_loss
+    mode: min
+    save_top_k: 1
+    save_last: True
+    enable_version_counter: False
+    auto_insert_metric_name: False
+
+# Interpolated paths
+root_dir: ${oc.env:PROJECT_ROOT}
+output_dir: ${root_dir}/saved_models
+full_path: ${output_dir}/${project_name}/${network_name}/
+
+# Run settings
+seed: 42 # For reproducibility
+project_name: chessbot2 # Determines output directory path and wandb project
+network_name: first # Used for both saving and wandb
+ckpt_path: null  # Checkpoint path to resume training
+precision: medium # Should use medium if on ampere gpus
+tags: null # Extra tags passed to the logger
+compile: default # Compile the model for faster training
+
+# COMPLETELY replaces the all config info with what is contained in ${full_path}
+# This is ideal for resuming a job, log to the same directory
+# Will also resume the logger and set the ckpt_path to the latest
+full_resume: False
+ckpt_flag: last.ckpt # Name of the checkpoint file, can use wildcards

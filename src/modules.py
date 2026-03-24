@@ -17,7 +17,7 @@ class TransformerConfig:
     seq_len: int = 65
     class_tokens: int = 1
     output_dim: int = 3
-    num_layers: int = 3
+    num_layers: int = 8
     num_heads: int = 8
     ff_mult: int = 2
 
@@ -31,8 +31,8 @@ class SwiGLUNet(nn.Module):
 
     def __init__(self, config: TransformerConfig) -> None:
         super().__init__()
-        self.lin1 = nn.Linear(config.dim, 2 * config.ff_mult * config.dim, bias=False)
-        self.lin2 = nn.Linear(config.ff_mult * config.dim, config.dim, bias=False)
+        self.lin1 = nn.Linear(config.dim, 2 * config.ff_mult * config.dim)
+        self.lin2 = nn.Linear(config.ff_mult * config.dim, config.dim)
         nn.init.zeros_(self.lin2.weight)
 
     def forward(self, x: T.Tensor) -> T.Tensor:
@@ -49,6 +49,7 @@ class SelfAttention(nn.Module):
         self.num_heads = config.num_heads
         self.qkv = nn.Linear(config.dim, 3 * config.dim, bias=False)
         self.out = nn.Linear(config.dim, config.dim, bias=False)
+        self.scale = nn.Parameter(T.tensor(1.0))
         nn.init.zeros_(self.out.weight)
 
     def forward(self, x: T.Tensor) -> T.Tensor:
@@ -57,10 +58,9 @@ class SelfAttention(nn.Module):
         HD = D // self.num_heads
         NH = self.num_heads
         q, k, v = self.qkv(x).reshape(B, S, 3, NH, HD).permute(2, 0, 3, 1, 4).unbind(0)
-        q, k = norm(q), norm(k)
+        q, k = norm(q), norm(k) * self.scale
         a_out = F.scaled_dot_product_attention(q, k, v)
         a_out = a_out.transpose(1, 2).contiguous().view(B, S, D)
-        a_out = norm(a_out)
         return self.out(a_out)
 
 
@@ -92,9 +92,10 @@ class TransformerClassifier(nn.Module):
 
     def forward(self, x: T.Tensor) -> T.Tensor:
         """Pass through all layers of the transformer."""
-        B, S = x.shape
-        x = self.embed(x) + self.pos_enc[:S]
+        B, _S = x.shape
+        x = self.embed(x) + self.pos_enc
         x = T.cat((self.class_tokens.expand(B, -1, -1), x), dim=1)
+        x = norm(x)
         for layer in self.layers:
             x = layer(x)
         x = x[:, 0]  # Trim off the class token (others are registers)

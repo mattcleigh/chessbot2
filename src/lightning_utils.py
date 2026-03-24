@@ -7,7 +7,6 @@ from lightning import LightningModule
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 
-
 log = logging.getLogger(__name__)
 
 

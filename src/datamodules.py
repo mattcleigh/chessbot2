@@ -1,6 +1,7 @@
 """Chess dataset and datamodule for training from parquet files."""
 
 import logging
+import random
 
 import chess
 import numpy as np
@@ -25,21 +26,38 @@ PIECE_TO_INT = {
     "r": 10,
     "q": 11,
     "k": 12,
-    "tW": 13,  # White to move
-    "tB": 14,  # Black to move
+    "e": 13,  # En passant square
+    "+": 14,  # Positive sign for context
+    "-": 15,  # Negative sign for context
 }
 
 
+def encode_flag(flag: bool) -> int:
+    return PIECE_TO_INT["+"] if flag else PIECE_TO_INT["-"]
+
+
 def encode_board(board: chess.Board) -> np.ndarray:
-    """Encode the board as a (1, 65) integer tensor matching training input."""
-    enc_board = np.zeros(65, dtype=np.int64)
+    """Encode the board as a 69-length vector of integers.
+
+    - 64 integers for each square
+    - 1 for the side to move
+    - 4 for castling rights
+    """
+    enc_board = np.zeros(69, dtype=np.int64)
+    ep_square = board.ep_square
     for square in chess.SQUARES:
         piece = board.piece_at(square)
         if piece:
             row, col = divmod(square, 8)
             enc_board[(7 - row) * 8 + col] = PIECE_TO_INT[piece.symbol()]
-    turn = "tW" if board.turn == chess.WHITE else "tB"
-    enc_board[64] = PIECE_TO_INT[turn]
+        elif square == ep_square:
+            row, col = divmod(square, 8)
+            enc_board[(7 - row) * 8 + col] = PIECE_TO_INT["e"]
+    enc_board[64] = encode_flag(board.turn)
+    enc_board[65] = encode_flag(board.has_kingside_castling_rights(chess.WHITE))
+    enc_board[66] = encode_flag(board.has_queenside_castling_rights(chess.WHITE))
+    enc_board[67] = encode_flag(board.has_kingside_castling_rights(chess.BLACK))
+    enc_board[68] = encode_flag(board.has_queenside_castling_rights(chess.BLACK))
     return enc_board
 
 
@@ -48,24 +66,23 @@ class ChessStringDataset(Dataset):
         table = pq.read_table(parquet_path, columns=["moves", "result"])
         self.moves = table["moves"].to_pylist()
         self.results = table["result"].to_pylist()
-        self.rng = np.random.default_rng()
 
     def __len__(self) -> int:
         return len(self.moves)
 
     def __getitem__(self, idx: int) -> dict:
         all_moves = self.moves[idx].split()
-        max_idx = max(0, len(all_moves) - 2)  # Don't select AFTER checkmate
-        random_ply = self.rng.integers(0, max_idx + 1)
-
+        random_ply = random.randint(1, len(all_moves))
+        random_ply = 0
         # Progress the board and encode
         board = chess.Board()
         for i in range(random_ply):
             board.push_san(all_moves[i])
-        enc_board = encode_board(board)
+        enc_board, enc_ctxt = encode_board(board)
 
         return {
             "board": T.from_numpy(enc_board),
+            "context": T.from_numpy(enc_ctxt),
             "result": T.tensor(self.results[idx], dtype=T.long),
         }
 

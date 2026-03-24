@@ -14,6 +14,7 @@ class ChessModel(LightningModule):
     def __init__(
         self,
         *,
+        pytorch_compile: str | None,
         config: TransformerConfig,
         optimizer: partial,  # noqa: ARG002
         scheduler: partial,  # noqa: ARG002
@@ -21,16 +22,24 @@ class ChessModel(LightningModule):
         super().__init__()
         self.save_hyperparameters(logger=False)
         self.model = TransformerClassifier(config)
-        self.accuracy = Accuracy(task="multiclass", num_classes=config.output_dim)
+        if pytorch_compile is not None:
+            self.model = T.compile(self.model, mode=pytorch_compile)
+        self.train_acc = Accuracy(task="multiclass", num_classes=config.output_dim)
+        self.valid_acc = Accuracy(task="multiclass", num_classes=config.output_dim)
 
     def _shared_step(self, data: dict, prefix: str) -> T.Tensor:
         board = data["board"]
         result = data["result"]
-        logits = self.model(board)
+        context = data["context"]
+        logits = self.model(board, context)
+
         loss = F.cross_entropy(logits, result)
-        self.accuracy(logits, result)
         self.log(f"{prefix}_loss", loss)
-        self.log(f"{prefix}_accuracy", self.accuracy)
+
+        acc = getattr(self, f"{prefix}_acc")
+        acc(logits, result)
+        self.log(f"{prefix}_accuracy", acc)
+
         return loss
 
     def forward(self, board: T.Tensor) -> T.Tensor:

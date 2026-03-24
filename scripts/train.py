@@ -44,10 +44,6 @@ def main(cfg: DictConfig) -> None:
     log.info("Instantiating the model")
     model = hydra.utils.instantiate(cfg.model)
 
-    if cfg.compile:
-        log.info("Compiling the model for faster training")
-        model = T.compile(model, mode=cfg.compile)
-
     log.info("Instantiating all callbacks")
     callbacks = instantiate_collection(cfg.callbacks)
 

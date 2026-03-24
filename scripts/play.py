@@ -52,15 +52,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# ---------------------------------------------------------------------------
-# Model helpers
-# ---------------------------------------------------------------------------
-
-
-def choose_device(preference: str) -> T.device:
-    if preference == "auto":
+def choose_device(device: str) -> T.device:
+    if device == "auto":
         return T.device("cuda" if T.cuda.is_available() else "cpu")
-    return T.device(preference)
+    return T.device(device)
 
 
 def load_model(ckpt_path: str, device: T.device) -> ChessModel:
@@ -68,33 +63,25 @@ def load_model(ckpt_path: str, device: T.device) -> ChessModel:
         ckpt_path, map_location=device, weights_only=False
     )
     model.eval()
-    model.to(device)
     return model
 
 
 @T.no_grad()
 def evaluate_moves(model: ChessModel, board: chess.Board, device: T.device):
-    """Score every legal move and return a list sorted best → worst for white.
-
-    Each entry is (move, win%, draw%, loss%) where "win" means white wins.
-    """
-    scored: list[tuple[chess.Move, float, float, float]] = []
-
+    """Score every legal move and return a list sorted bestto worst for white."""
+    # Create a list of (move, white_win_prob, draw_prob, black_win_prob) tuples.
+    scored = []
     for move in board.legal_moves:
         board.push(move)
-
         if board.is_checkmate():
-            # White just moved and it's checkmate → white wins with certainty.
             probs = (1.0, 0.0, 0.0)
         elif board.is_stalemate() or board.is_insufficient_material():
             probs = (0.0, 1.0, 0.0)
         else:
             enc_board = encode_board(board)
             enc_board = T.from_numpy(enc_board).unsqueeze(0).to(device)
-            logits = model(enc_board)  # (1, 3)
-            p = F.softmax(logits, dim=-1).squeeze(0)  # (3,)
-            probs = (p[0].item(), p[1].item(), p[2].item())
-
+            probs = model(enc_board).squeeze(0)
+            probs = tuple(p.item() for p in probs)
         scored.append((move, *probs))
         board.pop()
 
@@ -153,7 +140,8 @@ Commands:
 """)
 
 
-def play(args: argparse.Namespace) -> None:
+def main() -> None:
+    args = parse_args()
     device = choose_device(args.device)
     print(f"Using device: {device}")
     print(f"Loading checkpoint: {args.ckpt}")
@@ -163,8 +151,8 @@ def play(args: argparse.Namespace) -> None:
     show_eval = args.eval
     top_n = args.top_n
 
-    # History of FENs for undo support.
-    history: list[str] = [board.fen()]
+    # History allows undoing!
+    history = [board.fen()]
 
     print("\n♟  Chess Bot — Interactive Play  ♟")
     print("Model plays as WHITE.  You play as BLACK.")
@@ -173,11 +161,10 @@ def play(args: argparse.Namespace) -> None:
     show_board(board)
 
     while not board.is_game_over():
-        # ── Model's turn (White) ─────────────────────────────────
+        # Model's turn (White)
         if board.turn == chess.WHITE:
             print("Model is thinking …")
             scored = evaluate_moves(model, board, device)
-
             if show_eval:
                 show_eval_table(scored, top_n)
 
@@ -195,8 +182,8 @@ def play(args: argparse.Namespace) -> None:
                 break
             continue
 
-        # ── Human's turn (Black) ─────────────────────────────────
-        raw = input("Your move ▸ ").strip()
+        # Human's turn (Black)
+        raw = input("Your move: ").strip()
         if not raw:
             continue
 
@@ -231,7 +218,7 @@ def play(args: argparse.Namespace) -> None:
             continue
 
         # Try parsing as UCI, then SAN.
-        move: chess.Move | None = None
+        move = None
         with contextlib.suppress(ValueError):
             move = board.parse_uci(raw)
         if move is None:
@@ -245,7 +232,7 @@ def play(args: argparse.Namespace) -> None:
         history.append(board.fen())
         show_board(board)
 
-    # ── Game over ─────────────────────────────────────────────────
+    # Game over
     print(DIVIDER)
     result = board.result()
     if board.is_checkmate():
@@ -265,4 +252,4 @@ def play(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    play(parse_args())
+    main()

@@ -19,21 +19,23 @@ datamodule:
   _target_: src.datamodules.ChessDataModule
   train_path: ${root_dir}/data/train.parquet
   test_path: ${root_dir}/data/test.parquet
-  num_workers: 8
-  batch_size: 512
+  num_workers: 12
+  batch_size: 1024
+  pin_memory: True
 
 model:
   _target_: src.networks.ChessModel
+  pytorch_compile: default # Compile the model for faster training
   config:
     _target_: src.modules.TransformerConfig
-    dim: 384
-    vocab_size: 15
-    seq_len: 65 # 64 for board, +1 for turn indicator
+    dim: 128
+    vocab_size: 16
+    seq_len: 69 # 64 for board, +1 for turn indicator, +4 for castling rights
     class_tokens: 8 # Registers
     output_dim: 3
-    num_layers: 4
+    num_layers: 2
     num_heads: 8
-    ff_mult: 3
+    ff_mult: 2
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: True
@@ -42,7 +44,7 @@ model:
   scheduler:
     _target_: src.lightning_utils.linear_warmup_cosine_decay
     _partial_: True
-    warmup_steps: 5000
+    warmup_steps: 1000
 
 trainer:
   _target_: lightning.Trainer
@@ -93,11 +95,10 @@ full_path: ${output_dir}/${project_name}/${network_name}/
 # Run settings
 seed: 42 # For reproducibility
 project_name: chessbot2 # Determines output directory path and wandb project
-network_name: first # Used for both saving and wandb
+network_name: scale_teeny # Used for both saving and wandb
 ckpt_path: null  # Checkpoint path to resume training
 precision: medium # Should use medium if on ampere gpus
 tags: null # Extra tags passed to the logger
-compile: default # Compile the model for faster training
 
 # COMPLETELY replaces the all config info with what is contained in ${full_path}
 # This is ideal for resuming a job, log to the same directory

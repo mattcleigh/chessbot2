@@ -1,0 +1,3 @@
+[submodule "extern/fastchess"]
+	path = extern/fastchess
+	url = https://github.com/thefcraft/FastChess.git

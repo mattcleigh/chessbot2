@@ -3,7 +3,7 @@
 import logging
 import random
 
-import chess
+import bulletchess as bc
 import numpy as np
 import pyarrow.parquet as pq
 import torch as T
@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 
 log = logging.getLogger(__name__)
 
-PIECE_TO_INT = {
+BOARD_TO_INT = {
     ".": 0,
     "P": 1,
     "N": 2,
@@ -27,37 +27,40 @@ PIECE_TO_INT = {
     "q": 11,
     "k": 12,
     "e": 13,  # En passant square
-    "+": 14,  # Positive sign for context
-    "-": 15,  # Negative sign for context
+    True: 14,  # Positive sign for context
+    False: 15,  # Negative sign for context
 }
 
 
-def encode_flag(flag: bool) -> int:
-    return PIECE_TO_INT["+"] if flag else PIECE_TO_INT["-"]
-
-
-def encode_board(board: chess.Board) -> np.ndarray:
+def encode_board(board: bc.Board) -> np.ndarray:
     """Encode the board as a 69-length vector of integers.
 
     - 64 integers for each square
     - 1 for the side to move
     - 4 for castling rights
     """
+    # Initialize the empty board encoding
     enc_board = np.zeros(69, dtype=np.int64)
-    ep_square = board.ep_square
-    for square in chess.SQUARES:
-        piece = board.piece_at(square)
+
+    # Loop through the squares if it contains a piece, encode it
+    for square in bc.SQUARES:
+        piece = board[square]
         if piece:
-            row, col = divmod(square, 8)
-            enc_board[(7 - row) * 8 + col] = PIECE_TO_INT[piece.symbol()]
-        elif square == ep_square:
-            row, col = divmod(square, 8)
-            enc_board[(7 - row) * 8 + col] = PIECE_TO_INT["e"]
-    enc_board[64] = encode_flag(board.turn)
-    enc_board[65] = encode_flag(board.has_kingside_castling_rights(chess.WHITE))
-    enc_board[66] = encode_flag(board.has_queenside_castling_rights(chess.WHITE))
-    enc_board[67] = encode_flag(board.has_kingside_castling_rights(chess.BLACK))
-    enc_board[68] = encode_flag(board.has_queenside_castling_rights(chess.BLACK))
+            row, col = divmod(square.index(), 8)
+            enc_board[(7 - row) * 8 + col] = BOARD_TO_INT[str(piece)]
+
+    # Also include the location of an en passant square if it exists
+    if board.en_passant_square:
+        ep_square = board.en_passant_square.index()
+        row, col = divmod(ep_square, 8)
+        enc_board[(7 - row) * 8 + col] = BOARD_TO_INT["e"]
+
+    # Include extra contextual information about the game state
+    enc_board[64] = BOARD_TO_INT[board.turn == bc.WHITE]
+    enc_board[65] = BOARD_TO_INT[bc.WHITE_KINGSIDE in board.castling_rights]
+    enc_board[66] = BOARD_TO_INT[bc.WHITE_QUEENSIDE in board.castling_rights]
+    enc_board[67] = BOARD_TO_INT[bc.BLACK_KINGSIDE in board.castling_rights]
+    enc_board[68] = BOARD_TO_INT[bc.BLACK_QUEENSIDE in board.castling_rights]
     return enc_board
 
 
@@ -71,19 +74,22 @@ class ChessStringDataset(Dataset):
         return len(self.moves)
 
     def __getitem__(self, idx: int) -> dict:
-        all_moves = self.moves[idx].split()
-        random_ply = random.randint(1, len(all_moves))
-        random_ply = 0
-        # Progress the board and encode
-        board = chess.Board()
-        for i in range(random_ply):
-            board.push_san(all_moves[i])
-        enc_board, enc_ctxt = encode_board(board)
+        moves = self.moves[idx].split()
+        result = self.results[idx]
 
+        # Randomly choose a move up to the end of the game to progress to
+        random_play = random.randint(1, len(moves))
+
+        # Progress the board and encode
+        board = bc.Board()
+        for i in range(random_play):
+            board.apply(bc.Move.from_san(moves[i], board))
+        enc_board = encode_board(board)
+
+        # Return as a dict for the model
         return {
             "board": T.from_numpy(enc_board),
-            "context": T.from_numpy(enc_ctxt),
-            "result": T.tensor(self.results[idx], dtype=T.long),
+            "result": T.tensor(result, dtype=T.long),
         }
 
 

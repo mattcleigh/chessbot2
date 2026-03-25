@@ -23,6 +23,7 @@ class TransformerConfig:
 
 
 def norm(x):
+    """Simple rmsnorm with no learnable parameters."""
     return F.rms_norm(x, (x.size(-1),))  # note that this will run in bf16, seems ok
 
 
@@ -31,13 +32,13 @@ class SwiGLUNet(nn.Module):
 
     def __init__(self, config: TransformerConfig) -> None:
         super().__init__()
-        self.lin1 = nn.Linear(config.dim, 2 * config.ff_mult * config.dim)
-        self.lin2 = nn.Linear(config.ff_mult * config.dim, config.dim)
-        nn.init.zeros_(self.lin2.weight)
+        self.w1 = nn.Linear(config.dim, config.ff_mult * config.dim)  # Seperate for Mu
+        self.w2 = nn.Linear(config.dim, config.ff_mult * config.dim)
+        self.wo = nn.Linear(config.ff_mult * config.dim, config.dim)
+        nn.init.zeros_(self.wo.weight)
 
     def forward(self, x: T.Tensor) -> T.Tensor:
-        x1, x2 = self.lin1(x).chunk(2, dim=-1)
-        return self.lin2(F.silu(x1) * x2)
+        return self.wo(F.silu(self.w1(x)) * self.w2(x))
 
 
 class SelfAttention(nn.Module):
@@ -47,21 +48,25 @@ class SelfAttention(nn.Module):
         super().__init__()
         assert config.dim % config.num_heads == 0
         self.num_heads = config.num_heads
-        self.qkv = nn.Linear(config.dim, 3 * config.dim, bias=False)
-        self.out = nn.Linear(config.dim, config.dim, bias=False)
+        self.wq = nn.Linear(config.dim, config.dim, bias=False)  # Seperate for Muon
+        self.wk = nn.Linear(config.dim, config.dim, bias=False)
+        self.wv = nn.Linear(config.dim, config.dim, bias=False)
+        self.wo = nn.Linear(config.dim, config.dim, bias=False)
         self.scale = nn.Parameter(T.tensor(1.0))
-        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.wo.weight)
 
     def forward(self, x: T.Tensor) -> T.Tensor:
         """Dispatch to the appropriate attention function based on the inputs."""
         B, S, D = x.shape
         HD = D // self.num_heads
         NH = self.num_heads
-        q, k, v = self.qkv(x).reshape(B, S, 3, NH, HD).permute(2, 0, 3, 1, 4).unbind(0)
+        q = self.wq(x).view(B, S, NH, HD).transpose(1, 2)
+        k = self.wk(x).view(B, S, NH, HD).transpose(1, 2)
+        v = self.wv(x).view(B, S, NH, HD).transpose(1, 2)
         q, k = norm(q), norm(k) * self.scale
         a_out = F.scaled_dot_product_attention(q, k, v)
         a_out = a_out.transpose(1, 2).contiguous().view(B, S, D)
-        return self.out(a_out)
+        return self.wo(a_out)
 
 
 class Block(nn.Module):

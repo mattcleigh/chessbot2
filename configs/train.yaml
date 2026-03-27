@@ -20,7 +20,7 @@ datamodule:
   train_path: ${root_dir}/data/train
   test_path: ${root_dir}/data/test
   num_workers: 8
-  batch_size: 2048
+  batch_size: 512
   pin_memory: True
 
 model:
@@ -29,19 +29,19 @@ model:
 
   config:
     _target_: src.modules.TransformerConfig
-    dim: 512
+    dim: 128
     vocab_size: 16
     seq_len: 69 # 64 for board, +1 for turn indicator, +4 for castling rights
     class_tokens: 8 # Registers
     output_dim: 8
     num_layers: 4
     num_heads: 8
-    ff_mult: 4
+    ff_mult: 2
 
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: True
-    lr: 1e-3
+    lr: 1e-4
     weight_decay: 1e-4
 
   scheduler:

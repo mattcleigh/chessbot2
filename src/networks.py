@@ -25,7 +25,7 @@ class ChessModel(LightningModule):
         # Optionally compile the transformer for faster training
         self.model = TransformerClassifier(config)
         if pytorch_compile is not None:
-            self.model = T.compile(self.model, mode=pytorch_compile)
+            self.model = T.compile(self.model, mode=pytorch_compile, fullgraph=True)
 
         # Seperate metric trackers
         self.train_acc = Accuracy(task="multiclass", num_classes=config.output_dim)

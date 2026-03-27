@@ -48,25 +48,21 @@ class SelfAttention(nn.Module):
         super().__init__()
         assert config.dim % config.num_heads == 0
         self.num_heads = config.num_heads
-        self.wq = nn.Linear(config.dim, config.dim, bias=False)  # Seperate for Muon
-        self.wk = nn.Linear(config.dim, config.dim, bias=False)
-        self.wv = nn.Linear(config.dim, config.dim, bias=False)
-        self.wo = nn.Linear(config.dim, config.dim, bias=False)
+        self.qkv = nn.Linear(config.dim, 3 * config.dim, bias=False)
+        self.out = nn.Linear(config.dim, config.dim, bias=False)
         self.scale = nn.Parameter(T.tensor(1.0))
-        nn.init.zeros_(self.wo.weight)
+        nn.init.zeros_(self.out.weight)
 
     def forward(self, x: T.Tensor) -> T.Tensor:
         """Dispatch to the appropriate attention function based on the inputs."""
         B, S, D = x.shape
         HD = D // self.num_heads
         NH = self.num_heads
-        q = self.wq(x).view(B, S, NH, HD).transpose(1, 2)
-        k = self.wk(x).view(B, S, NH, HD).transpose(1, 2)
-        v = self.wv(x).view(B, S, NH, HD).transpose(1, 2)
+        q, k, v = self.qkv(x).view(B, S, 3, NH, HD).permute(2, 0, 3, 1, 4).unbind(0)
         q, k = norm(q), norm(k) * self.scale
         a_out = F.scaled_dot_product_attention(q, k, v)
         a_out = a_out.transpose(1, 2).contiguous().view(B, S, D)
-        return self.wo(a_out)
+        return self.out(a_out)
 
 
 class Block(nn.Module):

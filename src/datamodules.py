@@ -26,10 +26,16 @@ BOARD_TO_INT = {
     "r": 10,
     "q": 11,
     "k": 12,
-    "e": 13,  # En passant square
-    True: 14,  # Positive sign for context
-    False: 15,  # Negative sign for context
+    # 13 = En passant square
+    # 14 = Positive bool
+    # 15 = Negative bool
 }
+
+
+def bitboard_to_numpy_mask(bb: int) -> np.ndarray:
+    """Converts a 64-bit integer bitboard into a (64,) boolean NumPy mask."""
+    as_bytes = np.array([bb], dtype="<u8").view(np.uint8)
+    return np.unpackbits(as_bytes, bitorder="little").astype(bool)
 
 
 def encode_board(board: bc.Board) -> np.ndarray:
@@ -42,39 +48,43 @@ def encode_board(board: bc.Board) -> np.ndarray:
     # Initialize the empty board encoding
     enc_board = np.zeros(69, dtype=np.int64)
 
-    # Loop through the squares if it contains a piece, encode it
-    for square in bc.SQUARES:
-        piece = board[square]
-        if piece:
-            row, col = divmod(square.index(), 8)
-            enc_board[(7 - row) * 8 + col] = BOARD_TO_INT[str(piece)]
+    # Loop through each piece type and color, fill in the encoding
+    for p in bc.PIECE_TYPES:
+        for c in [bc.WHITE, bc.BLACK]:
+            bb = board[c, p]
+            if bb:
+                mask = bitboard_to_numpy_mask(bb)
+                val = BOARD_TO_INT[str(bc.Piece(c, p))]
+                enc_board[:64][mask] = val
 
     # Also include the location of an en passant square if it exists
     if board.en_passant_square:
-        ep_square = board.en_passant_square.index()
-        row, col = divmod(ep_square, 8)
-        enc_board[(7 - row) * 8 + col] = BOARD_TO_INT["e"]
+        ep_square = board.en_passant_square.bb()
+        ep_mask = bitboard_to_numpy_mask(ep_square)
+        enc_board[:64][ep_mask] = 13
 
     # Include extra contextual information about the game state
-    enc_board[64] = BOARD_TO_INT[board.turn == bc.WHITE]
-    enc_board[65] = BOARD_TO_INT[bc.WHITE_KINGSIDE in board.castling_rights]
-    enc_board[66] = BOARD_TO_INT[bc.WHITE_QUEENSIDE in board.castling_rights]
-    enc_board[67] = BOARD_TO_INT[bc.BLACK_KINGSIDE in board.castling_rights]
-    enc_board[68] = BOARD_TO_INT[bc.BLACK_QUEENSIDE in board.castling_rights]
+    castling_types = [
+        bc.WHITE_KINGSIDE,
+        bc.WHITE_QUEENSIDE,
+        bc.BLACK_KINGSIDE,
+        bc.BLACK_QUEENSIDE,
+    ]
+    enc_board[64] = 14 if board.turn == bc.WHITE else 15
+    enc_board[65:] = [14 if r in board.castling_rights else 15 for r in castling_types]
     return enc_board
 
 
 class ChessStringDataset(Dataset):
     def __init__(self, parquet_path: str) -> None:
-        table = pq.read_table(parquet_path, columns=["moves", "result"])
-        self.moves = table["moves"].to_pylist()
-        self.results = table["result"].to_pylist()
+        self.table = pq.read_table(parquet_path, columns=["moves", "result"])
+        self.results = self.table["result"].to_numpy()
 
     def __len__(self) -> int:
-        return len(self.moves)
+        return len(self.results)
 
     def __getitem__(self, idx: int) -> dict:
-        moves = self.moves[idx].split()
+        moves = self.table["moves"][idx].as_py().split()
         result = self.results[idx]
 
         # Randomly choose a move up to the end of the game to progress to
@@ -83,7 +93,7 @@ class ChessStringDataset(Dataset):
         # Progress the board and encode
         board = bc.Board()
         for i in range(random_play):
-            board.apply(bc.Move.from_san(moves[i], board))
+            board.apply(bc.Move.from_uci(moves[i]))
         enc_board = encode_board(board)
 
         # Return as a dict for the model

@@ -4,75 +4,14 @@ import logging
 import random
 
 import bulletchess as bc
-import numpy as np
 import pyarrow.parquet as pq
 import torch as T
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
+from src.engine import encode_board
+
 log = logging.getLogger(__name__)
-
-BOARD_TO_INT = {
-    ".": 0,
-    "P": 1,
-    "N": 2,
-    "B": 3,
-    "R": 4,
-    "Q": 5,
-    "K": 6,
-    "p": 7,
-    "n": 8,
-    "b": 9,
-    "r": 10,
-    "q": 11,
-    "k": 12,
-    # 13 = En passant square
-    # 14 = Positive bool
-    # 15 = Negative bool
-}
-
-
-def bitboard_to_numpy_mask(bb: int) -> np.ndarray:
-    """Converts a 64-bit integer bitboard into a (64,) boolean NumPy mask."""
-    as_bytes = np.array([bb], dtype="<u8").view(np.uint8)
-    return np.unpackbits(as_bytes, bitorder="little").astype(bool)
-
-
-def encode_board(board: bc.Board) -> np.ndarray:
-    """Encode the board as a 69-length vector of integers.
-
-    - 64 integers for each square
-    - 1 for the side to move
-    - 4 for castling rights
-    """
-    # Initialize the empty board encoding
-    enc_board = np.zeros(69, dtype=np.int64)
-
-    # Loop through each piece type and color, fill in the encoding
-    for p in bc.PIECE_TYPES:
-        for c in [bc.WHITE, bc.BLACK]:
-            bb = board[c, p]
-            if bb:
-                mask = bitboard_to_numpy_mask(bb)
-                val = BOARD_TO_INT[str(bc.Piece(c, p))]
-                enc_board[:64][mask] = val
-
-    # Also include the location of an en passant square if it exists
-    if board.en_passant_square:
-        ep_square = board.en_passant_square.bb()
-        ep_mask = bitboard_to_numpy_mask(ep_square)
-        enc_board[:64][ep_mask] = 13
-
-    # Include extra contextual information about the game state
-    castling_types = [
-        bc.WHITE_KINGSIDE,
-        bc.WHITE_QUEENSIDE,
-        bc.BLACK_KINGSIDE,
-        bc.BLACK_QUEENSIDE,
-    ]
-    enc_board[64] = 14 if board.turn == bc.WHITE else 15
-    enc_board[65:] = [14 if r in board.castling_rights else 15 for r in castling_types]
-    return enc_board
 
 
 class ChessStringDataset(Dataset):
